@@ -1,0 +1,1 @@
+En esta carpeta van todos los codigos o paginas relacionadas con el admin. Unicamente paginas de admin

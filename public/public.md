@@ -1,0 +1,1 @@
+Dentro de esta carpeta van todas las imagenes, logos etc.
