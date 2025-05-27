@@ -26,7 +26,11 @@ const Panel: React.FC = () => {
   // State for stores and deliveries
   const [stores, setStores] = useState<Store[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
-  
+  // State for daily bolis calculation
+  const [dailyBolisResult, setDailyBolisResult] = useState<{ storeName: string; total: number }[]>([]);
+  const [grandTotal, setGrandTotal] = useState<number>(0);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
   // State for form inputs
   const [storeNickname, setStoreNickname] = useState('');
   const [storeName, setStoreName] = useState('');
@@ -56,9 +60,9 @@ const Panel: React.FC = () => {
           .select('*');
         if (deliveriesError) throw deliveriesError;
         setDeliveries(deliveriesData || []);
-      } catch (error) {
+      } catch (error: any) {
         console.error('Error fetching data:', error);
-        alert('Error al cargar los datos. Por favor, intenta de nuevo.');
+        setErrorMessage(`Error al cargar datos: ${error.message}`);
       }
     };
     fetchData();
@@ -87,13 +91,14 @@ const Panel: React.FC = () => {
           setStoreAddress('');
           setStoreContact('');
           setStoreVisitDate('');
+          setErrorMessage(null);
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error('Error adding store:', error);
-        alert('Error al agregar la tienda. Por favor, intenta de nuevo.');
+        setErrorMessage(`Error al agregar la tienda: ${error.message}`);
       }
     } else {
-      alert('Por favor, completa todos los campos.');
+      setErrorMessage('Por favor, completa todos los campos');
     }
   };
 
@@ -120,14 +125,15 @@ const Panel: React.FC = () => {
           setDeliveryDebt('');
           setDeliveryDate('');
           setDeliveryNotes('');
+          setErrorMessage(null);
           alert('Entrega registrada correctamente.');
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error('Error adding delivery:', error);
-        alert('Error al registrar la entrega. Por favor, intenta de nuevo.');
+        setErrorMessage(`Error al registrar la entrega: ${error.message}`);
       }
     } else {
-      alert('Por favor, completa todos los campos obligatorios.');
+      setErrorMessage('Por favor, completa todos los campos');
     }
   };
 
@@ -135,19 +141,18 @@ const Panel: React.FC = () => {
   const deleteStore = async (storeId: number) => {
     if (window.confirm('¿Estás seguro de que quieres eliminar esta tienda y todas sus entregas?')) {
       try {
-        // Delete store (this will also delete related deliveries due to ON DELETE CASCADE)
         const { error: storeError } = await supabase
           .from('tiendas')
           .delete()
           .eq('id', storeId);
         if (storeError) throw storeError;
 
-        // Update state
         setStores(stores.filter((store) => store.id !== storeId));
         setDeliveries(deliveries.filter((delivery) => delivery.tienda !== storeId));
-      } catch (error) {
+        setErrorMessage(null);
+      } catch (error: any) {
         console.error('Error deleting store:', error);
-        alert('Error al eliminar la tienda. Por favor, intenta de nuevo.');
+        setErrorMessage(`Error al eliminar la tienda: ${error.message}`);
       }
     }
   };
@@ -162,13 +167,68 @@ const Panel: React.FC = () => {
           .eq('id', deliveryId);
         if (error) throw error;
 
-        // Update state
         setDeliveries(deliveries.filter((delivery) => delivery.id !== deliveryId));
+        setErrorMessage(null);
         alert('Entrega eliminada correctamente.');
-      } catch (error) {
+      } catch (error: any) {
         console.error('Error deleting delivery:', error);
-        alert('Error al eliminar la entrega. Por favor, intenta de nuevo.');
+        setErrorMessage(`Error al eliminar la entrega: ${error.message}`);
       }
+    }
+  };
+
+  // Calculate total bolis sold today
+  const calculateDailyBolis = async () => {
+    try {
+      setErrorMessage(null);
+      // Get today's date in CST (America/Chicago)
+      const today = new Date().toLocaleDateString('en-CA', { 
+        timeZone: 'America/Chicago',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).split('/').join('-'); // Format: YYYY-MM-DD
+      console.log('Fecha de hoy (CST):', today);
+
+      // Fetch deliveries for today
+      const { data: deliveriesData, error: deliveriesError } = await supabase
+        .rpc('get_deliveries_for_date', { target_date: today });
+
+      if (deliveriesError) throw deliveriesError;
+      console.log('Entregas de hoy:', deliveriesData);
+
+      // Group deliveries by tienda_id and calculate sum of dejados
+      const bolisByStore: { [key: number]: number } = {};
+      deliveriesData.forEach((delivery: Delivery) => {
+        if (delivery.dejados !== null && !isNaN(delivery.dejados)) {
+          bolisByStore[delivery.tienda] = (bolisByStore[delivery.tienda] || 0) + delivery.dejados;
+        }
+      });
+
+      console.log('Bolis por tienda:', bolisByStore);
+
+      // Prepare result for display
+      const result = Object.entries(bolisByStore).map(([tiendaId, total]) => {
+        const store = stores.find((s) => s.id === parseInt(tiendaId));
+        return {
+          storeName: store ? store.nombre_tienda : `Tienda ${tiendaId}`,
+          total,
+        };
+      });
+
+      // Calculate grand total
+      const grandTotal = result.reduce((sum, item) => sum + item.total, 0);
+
+      // Update UI with results
+      setDailyBolisResult(result);
+      setGrandTotal(grandTotal);
+
+      if (result.length === 0) {
+        setErrorMessage(`No se registraron bolis dejados hoy (${today}).`);
+      }
+    } catch (error: any) {
+      console.error('Error calculando bolis del día:', error);
+      setErrorMessage(`Error al calcular los bolis dejados: ${error.message}`);
     }
   };
 
@@ -179,6 +239,32 @@ const Panel: React.FC = () => {
     <div className="bg-gray-100 font-sans p-4 min-h-screen">
       <div className="max-w-4xl mx-auto">
         <h1 className="text-3xl font-bold text-center mb-6">Panel Karam Bolis Gourmet</h1>
+
+        {/* Cuadro para calcular bolis del día */}
+        <div className="bg-white p-4 rounded-lg shadow-md mb-6 text-center">
+          <button
+            onClick={calculateDailyBolis}
+            className="bg-blue-500 text-white p-2 rounded hover:bg-blue-600 text-sm"
+          >
+            Hacer cuenta del día
+          </button>
+          {errorMessage && (
+            <p className="text-red-500 text-sm mt-2">{errorMessage}</p>
+          )}
+          {dailyBolisResult.length > 0 && (
+            <div className="mt-4">
+              <h3 className="text-lg font-semibold">Bolis dejados hoy:</h3>
+              <ul className="text-left">
+                {dailyBolisResult.map((item, index) => (
+                  <li key={index} className="text-sm">
+                    {item.storeName}: {item.total} bolis
+                  </li>
+                ))}
+              </ul>
+              <p className="text-sm font-bold mt-2">Total: {grandTotal} bolis</p>
+            </div>
+          )}
+        </div>
 
         {/* Formulario para registrar tienda */}
         <div className="bg-white p-6 rounded-lg shadow-md mb-6">
@@ -239,7 +325,7 @@ const Panel: React.FC = () => {
               <option value="">Selecciona una tienda</option>
               {stores.map((store) => (
                 <option key={store.id} value={store.id}>
-                  {store.nombre_tienda}
+                  {store.apodo}
                 </option>
               ))}
             </select>
@@ -301,7 +387,13 @@ const Panel: React.FC = () => {
                   <td className="border p-2">{store.domicilio}</td>
                   <td className="border p-2">{store.atiende || 'N/A'}</td>
                   <td className="border p-2">{store.fecha || 'N/A'}</td>
-                  <td className="border p-2">
+                  <td className="border p-2 flex gap-2">
+                    <Link
+                      to={`/edit-store?storeId=${store.id}`}
+                      className="bg-purple-500 text-white p-2 rounded hover:bg-purple-600"
+                    >
+                      Ver/Editar
+                    </Link>
                     <button
                       onClick={() => deleteStore(store.id)}
                       className="bg-red-500 text-white p-2 rounded hover:bg-red-600"
